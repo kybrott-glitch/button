@@ -8,15 +8,14 @@ import re
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    User, Chat, ChatMember
+    User, Chat, ChatMember, InlineQueryResultArticle,
+    InputTextMessageContent
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, InlineQueryHandler
 )
-from telegram.inline.inlinequeryresultarticle import InlineQueryResultArticle
-from telegram.inline.inputtextmessagecontent import InputTextMessageContent
 from telegram.error import BadRequest
 
 # Enable logging
@@ -759,17 +758,19 @@ class ColorfulButtonBot:
             user_id = update.effective_user.id
         
         if not context.user_data.get('post_content'):
-            await update.message.reply_text("❌ No post created yet!\nUse /newpost first.")
+            if update.message:
+                await update.message.reply_text("❌ No post created yet!\nUse /newpost first.")
             return False
         
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            await update.message.reply_text(
-                "❌ **No channels connected!**\n\n"
-                "Please connect a channel first using `/connect`",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            if update.message:
+                await update.message.reply_text(
+                    "❌ **No channels connected!**\n\n"
+                    "Please connect a channel first using `/connect`",
+                    parse_mode=ParseMode.MARKDOWN
+                )
             return False
         
         target_channel = None
@@ -788,7 +789,8 @@ class ColorfulButtonBot:
                 target_channel = channels[0]
         
         if not target_channel:
-            await update.message.reply_text("❌ No valid channel found!")
+            if update.message:
+                await update.message.reply_text("❌ No valid channel found!")
             return False
         
         try:
