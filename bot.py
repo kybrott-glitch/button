@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import os
 import re
+import html
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -31,6 +32,13 @@ ADMIN_USER_ID = 1899208318  # Replace with your Telegram user ID (Main Admin)
 
 # File to store data
 AUTH_FILE = "authorized_users.json"
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for MarkdownV2"""
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
 
 class UserManager:
     """Manage authorized users and admins"""
@@ -246,12 +254,7 @@ class ColorfulButtonBot:
             user_id = update.effective_user.id
             if not self.check_auth(user_id):
                 await update.message.reply_text(
-                    "⛔ **Access Denied**\n\n"
-                    "You are not authorized to use this bot.\n\n"
-                    "Please contact the bot administrator to request access.\n\n"
-                    "If you have an authorization code, use:\n"
-                    "`/auth YOUR_CODE`",
-                    parse_mode=ParseMode.MARKDOWN
+                    "⛔ Access Denied!\n\nYou are not authorized to use this bot.\n\nPlease contact the bot administrator to request access.\n\nIf you have an authorization code, use:\n/auth YOUR_CODE"
                 )
                 return
             return await func(self, update, context)
@@ -267,26 +270,26 @@ class ColorfulButtonBot:
             channels = self.user_manager.get_user_channels(user_id)
             
             welcome_text = (
-                f"🎨 **Welcome back, {user.first_name}!** 🎨\n"
-                f"**Role:** {role.upper()}\n"
-                f"**Connected Channels:** {len(channels)}\n\n"
+                f"🎨 Welcome back, {user.first_name}! 🎨\n"
+                f"Role: {role.upper()}\n"
+                f"Connected Channels: {len(channels)}\n\n"
                 "I can help you create amazing posts with:\n"
-                "• ✨ Colorful inline buttons (8 different colors!)\n"
-                "• 📝 Rich formatting (Markdown & HTML)\n"
-                "• 🖼️ Media support\n"
-                "• 🔄 Inline mode\n"
-                "• 📢 Multi-channel posting\n\n"
-                "**Commands:**\n"
+                "• Colorful inline buttons (8 different colors!)\n"
+                "• Rich formatting\n"
+                "• Media support\n"
+                "• Inline mode\n"
+                "• Multi-channel posting\n\n"
+                "Commands:\n"
                 "/newpost - Start creating a new post\n"
                 "/templates - View post templates\n"
                 "/channels - Manage your channels\n"
                 "/postnow - Post to channel\n"
                 "/help - Detailed help\n\n"
-                "**Channel Management:**\n"
+                "Channel Management:\n"
                 "/connect - Connect a channel (forward a message)\n"
                 "/disconnect - Remove a channel\n"
                 "/setdefault - Set default channel\n\n"
-                "**Admin Commands** (Admins only):\n"
+                "Admin Commands (Admins only):\n"
                 "/users - List authorized users\n"
                 "/adduser - Add new user\n"
                 "/removeuser - Remove user\n"
@@ -294,20 +297,18 @@ class ColorfulButtonBot:
             )
             await update.message.reply_text(
                 welcome_text,
-                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=self.get_main_keyboard()
             )
         else:
             await update.message.reply_text(
-                f"🔐 **Welcome {user.first_name}** 🔐\n\n"
+                f"🔐 Welcome {user.first_name} 🔐\n\n"
                 "This bot is restricted to authorized users only.\n\n"
-                "**How to get access:**\n"
+                "How to get access:\n"
                 "1. Contact the bot administrator\n"
                 "2. If you have an authorization code, use:\n"
-                "   `/auth YOUR_CODE`\n\n"
-                f"**Administrator Contact:**\nMain Admin ID: `{ADMIN_USER_ID}`\n\n"
-                "*Note: Only the bot owner can grant access.*",
-                parse_mode=ParseMode.MARKDOWN
+                f"   /auth YOUR_CODE\n\n"
+                f"Administrator Contact: {ADMIN_USER_ID}\n\n"
+                "Note: Only the bot owner can grant access."
             )
     
     async def auth_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -323,8 +324,7 @@ class ColorfulButtonBot:
         if not args:
             await update.message.reply_text(
                 "❌ Please provide an authorization code.\n"
-                "Usage: `/auth YOUR_CODE`",
-                parse_mode=ParseMode.MARKDOWN
+                "Usage: /auth YOUR_CODE"
             )
             return
         
@@ -341,23 +341,21 @@ class ColorfulButtonBot:
             
             if success:
                 await update.message.reply_text(
-                    f"✅ **Authorization Successful!**\n\n"
+                    f"✅ Authorization Successful!\n\n"
                     f"Welcome {user.first_name}! You now have access to the bot.\n\n"
-                    "**Next Steps:**\n"
+                    "Next Steps:\n"
                     "1. Add this bot as admin to your channel\n"
-                    "2. Use `/connect` and forward a message from your channel\n"
+                    "2. Use /connect and forward a message from your channel\n"
                     "3. Start creating amazing posts!\n\n"
-                    "Use /help to get started.",
-                    parse_mode=ParseMode.MARKDOWN
+                    "Use /help to get started."
                 )
             else:
                 await update.message.reply_text("❌ Error adding user. Please contact administrator.")
         else:
             await update.message.reply_text(
-                "❌ **Invalid Authorization Code**\n\n"
+                "❌ Invalid Authorization Code\n\n"
                 "Please check your code and try again.\n"
-                "Contact administrator if you need access.",
-                parse_mode=ParseMode.MARKDOWN
+                "Contact administrator if you need access."
             )
     
     async def connect_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -368,17 +366,16 @@ class ColorfulButtonBot:
             return
         
         await update.message.reply_text(
-            "🔗 **Connect a Channel** 🔗\n\n"
+            "🔗 Connect a Channel 🔗\n\n"
             "To connect your channel to this bot:\n\n"
-            "1. **Add this bot as admin** to your channel\n"
-            "2. **Forward any message** from that channel to this chat\n"
+            "1. Add this bot as admin to your channel\n"
+            "2. Forward any message from that channel to this chat\n"
             "3. The bot will automatically detect and connect the channel\n\n"
-            "**Important:**\n"
+            "Important:\n"
             "• Bot needs 'Post Messages' permission\n"
             "• You can connect multiple channels\n"
             "• Each user can manage their own channels\n\n"
-            "*Forward a message from your channel now...*",
-            parse_mode=ParseMode.MARKDOWN
+            "Forward a message from your channel now..."
         )
         
         self.channel_pending_connection[user_id] = True
@@ -415,25 +412,23 @@ class ColorfulButtonBot:
             bot_member = await context.bot.get_chat_member(channel_id, context.bot.id)
             if bot_member.status not in ['administrator', 'creator']:
                 await update.message.reply_text(
-                    "❌ **Bot is not an admin in this channel!**\n\n"
+                    "❌ Bot is not an admin in this channel!\n\n"
                     "Please add this bot as an admin to your channel first.\n\n"
-                    "**Required permissions:**\n"
+                    "Required permissions:\n"
                     "• Post Messages\n"
                     "• Edit Messages (optional)\n"
-                    "• Delete Messages (optional)",
-                    parse_mode=ParseMode.MARKDOWN
+                    "• Delete Messages (optional)"
                 )
                 del self.channel_pending_connection[user_id]
                 return
         except BadRequest as e:
             await update.message.reply_text(
-                f"❌ **Cannot verify bot permissions!**\n\n"
+                f"❌ Cannot verify bot permissions!\n\n"
                 f"Error: {str(e)}\n\n"
                 f"Make sure:\n"
                 f"• Bot is added as admin to the channel\n"
                 f"• Channel is not private\n"
-                f"• You forwarded a message from the correct channel",
-                parse_mode=ParseMode.MARKDOWN
+                f"• You forwarded a message from the correct channel"
             )
             del self.channel_pending_connection[user_id]
             return
@@ -451,22 +446,20 @@ class ColorfulButtonBot:
         if success:
             default_text = " (Set as Default)" if channel_info["is_default"] else ""
             await update.message.reply_text(
-                f"✅ **Channel Connected Successfully!**{default_text}\n\n"
-                f"**Channel:** {channel_title}\n"
-                f"**ID:** `{channel_id}`\n"
-                f"**Username:** @{channel_username if channel_username else 'N/A'}\n\n"
-                f"**What's Next?**\n"
-                f"• Use `/postnow` to post to this channel\n"
-                f"• Use `/channels` to manage all your channels\n"
-                f"• Use `/setdefault` to change default channel\n"
-                f"• Use `/disconnect` to remove this channel",
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ Channel Connected Successfully!{default_text}\n\n"
+                f"Channel: {channel_title}\n"
+                f"ID: {channel_id}\n"
+                f"Username: @{channel_username if channel_username else 'N/A'}\n\n"
+                f"What's Next?\n"
+                f"• Use /postnow to post to this channel\n"
+                f"• Use /channels to manage all your channels\n"
+                f"• Use /setdefault to change default channel\n"
+                f"• Use /disconnect to remove this channel"
             )
         else:
             await update.message.reply_text(
-                "⚠️ **Channel already connected!**\n\n"
-                "Use `/channels` to see your connected channels.",
-                parse_mode=ParseMode.MARKDOWN
+                "⚠️ Channel already connected!\n\n"
+                "Use /channels to see your connected channels."
             )
         
         del self.channel_pending_connection[user_id]
@@ -482,31 +475,27 @@ class ColorfulButtonBot:
         
         if not channels:
             await update.message.reply_text(
-                "📢 **No Channels Connected** 📢\n\n"
+                "📢 No Channels Connected 📢\n\n"
                 "You haven't connected any channels yet.\n\n"
-                "**To connect a channel:**\n"
+                "To connect a channel:\n"
                 "1. Add this bot as admin to your channel\n"
-                "2. Use `/connect` command\n"
+                "2. Use /connect command\n"
                 "3. Forward a message from your channel\n\n"
-                "The bot will automatically detect and connect it!",
-                parse_mode=ParseMode.MARKDOWN
+                "The bot will automatically detect and connect it!"
             )
             return
         
-        channel_list = "📢 **Your Connected Channels** 📢\n\n"
+        channel_list = "📢 Your Connected Channels 📢\n\n"
         
         for i, channel in enumerate(channels, 1):
             default_mark = " ⭐ (Default)" if channel.get("is_default", False) else ""
-            channel_list += f"{i}. **{channel['channel_title']}**{default_mark}\n"
-            channel_list += f"   ID: `{channel['channel_id']}`\n"
+            channel_list += f"{i}. {channel['channel_title']}{default_mark}\n"
+            channel_list += f"   ID: {channel['channel_id']}\n"
             if channel.get('channel_username'):
                 channel_list += f"   Username: @{channel['channel_username']}\n"
             channel_list += f"   Connected: {channel['connected_date'][:10]}\n\n"
         
-        await update.message.reply_text(
-            channel_list,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text(channel_list)
     
     async def disconnect_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Disconnect a channel"""
@@ -533,9 +522,8 @@ class ColorfulButtonBot:
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_disconnect")])
         
         await update.message.reply_text(
-            "🗑️ **Select channel to disconnect:**\n\n"
+            "🗑️ Select channel to disconnect:\n\n"
             "This will remove the channel from your bot access.",
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -565,10 +553,9 @@ class ColorfulButtonBot:
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_default")])
         
         await update.message.reply_text(
-            "⭐ **Set Default Channel** ⭐\n\n"
+            "⭐ Set Default Channel ⭐\n\n"
             "Select which channel should be your default for posting.\n"
             "The default channel will be used when you don't specify one.",
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -579,35 +566,35 @@ class ColorfulButtonBot:
         is_admin = self.user_manager.is_admin(user_id)
         
         help_text = (
-            "📚 **Detailed Help Guide**\n\n"
-            "**Channel Management:**\n"
+            "📚 Detailed Help Guide\n\n"
+            "Channel Management:\n"
             "/connect - Connect a new channel (forward a message)\n"
             "/channels - List your connected channels\n"
             "/disconnect - Remove a connected channel\n"
             "/setdefault - Set default channel for posting\n\n"
-            "**Creating Posts:**\n"
-            "1. Use `/newpost` and follow the wizard\n"
+            "Creating Posts:\n"
+            "1. Use /newpost and follow the wizard\n"
             "2. Choose post type (text, media, or mixed)\n"
             "3. Add your content with formatting\n"
             "4. Add colorful buttons using HTML tags\n"
             "5. Post to channel or copy the message\n\n"
-            "**Colorful Buttons - Use HTML tags:**\n"
-            "- `<button primary>Click Me</button>` - Blue button\n"
-            "- `<button success>Success</button>` - Green button\n"
-            "- `<button danger>Delete</button>` - Red button\n"
-            "- `<button warning>Warning</button>` - Yellow button\n"
-            "- `<button info>Info</button>` - Light blue\n"
-            "- `<button purple>Special</button>` - Purple button\n"
-            "- `<button dark>Dark Mode</button>` - Dark button\n"
-            "- `<button light>Light Mode</button>` - White button\n\n"
-            "**URL Buttons:**\n"
-            "`<url primary>https://example.com|Visit Site</url>`\n\n"
-            "**Post Templates:**\n"
+            "Colorful Buttons - Use HTML tags:\n"
+            "- <button primary>Click Me</button> - Blue button\n"
+            "- <button success>Success</button> - Green button\n"
+            "- <button danger>Delete</button> - Red button\n"
+            "- <button warning>Warning</button> - Yellow button\n"
+            "- <button info>Info</button> - Light blue\n"
+            "- <button purple>Special</button> - Purple button\n"
+            "- <button dark>Dark Mode</button> - Dark button\n"
+            "- <button light>Light Mode</button> - White button\n\n"
+            "URL Buttons:\n"
+            "<url primary>https://example.com|Visit Site</url>\n\n"
+            "Post Templates:\n"
             "• Announcement template\n"
             "• Poll with voting buttons\n"
             "• Product showcase\n"
             "• Countdown timer\n\n"
-            "**Examples:**\n"
+            "Examples:\n"
             "Check out this amazing deal!\n"
             "<button success>Buy Now</button>\n"
             "<button info>Learn More</button>"
@@ -615,18 +602,14 @@ class ColorfulButtonBot:
         
         if is_admin:
             help_text += (
-                "\n\n**Admin Commands:**\n"
+                "\n\nAdmin Commands:\n"
                 "/users - List all authorized users\n"
                 "/adduser - Add new user (by ID)\n"
                 "/removeuser - Remove user (by ID)\n"
                 "/setadmin - Make user admin"
             )
         
-        await update.message.reply_text(
-            help_text,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
+        await update.message.reply_text(help_text)
     
     def get_main_keyboard(self):
         """Create main keyboard with colorful buttons"""
@@ -668,9 +651,8 @@ class ColorfulButtonBot:
         ]
         
         await update.message.reply_text(
-            "🎨 **Choose Post Type**\n\n"
+            "🎨 Choose Post Type\n\n"
             "What kind of post would you like to create?",
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
@@ -681,44 +663,33 @@ class ColorfulButtonBot:
     async def templates_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show post templates"""
         templates = (
-            "📋 **Available Post Templates**\n\n"
-            "**1. Announcement Template:**\n"
-            "```\n"
-            "📢 **ANNOUNCEMENT** 📢\n\n"
+            "📋 Available Post Templates\n\n"
+            "1. Announcement Template:\n"
+            "📢 ANNOUNCEMENT 📢\n\n"
             "{message}\n\n"
             "<button primary>Learn More</button>\n"
-            "<button success>Register</button>\n"
-            "```\n\n"
-            "**2. Poll/Voting Template:**\n"
-            "```\n"
-            "🗳️ **Community Vote** 🗳️\n\n"
+            "<button success>Register</button>\n\n"
+            "2. Poll/Voting Template:\n"
+            "🗳️ Community Vote 🗳️\n\n"
             "Topic: {topic}\n\n"
             "<button success>✅ Yes</button>\n"
             "<button danger>❌ No</button>\n"
-            "<button info>🤔 Maybe</button>\n"
-            "```\n\n"
-            "**3. Product Showcase:**\n"
-            "```\n"
-            "✨ **New Product Alert** ✨\n\n"
+            "<button info>🤔 Maybe</button>\n\n"
+            "3. Product Showcase:\n"
+            "✨ New Product Alert ✨\n\n"
             "{product_name}\n"
             "{description}\n\n"
             "<button primary>🛒 Buy Now</button>\n"
-            "<button info>ℹ️ Details</button>\n"
-            "```\n\n"
-            "**4. Countdown/Event:**\n"
-            "```\n"
-            "⏰ **Event Countdown** ⏰\n\n"
+            "<button info>ℹ️ Details</button>\n\n"
+            "4. Countdown/Event:\n"
+            "⏰ Event Countdown ⏰\n\n"
             "Event: {event_name}\n"
             "Time: {time}\n\n"
             "<button primary>📅 Add to Calendar</button>\n"
-            "<button info>🔔 Remind Me</button>\n"
-            "```"
+            "<button info>🔔 Remind Me</button>"
         )
         
-        await update.message.reply_text(
-            templates,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text(templates)
     
     def parse_button_markup(self, text: str) -> tuple:
         """Parse custom button markup and return (clean_text, buttons)"""
@@ -767,9 +738,8 @@ class ColorfulButtonBot:
         if not channels:
             if update.message:
                 await update.message.reply_text(
-                    "❌ **No channels connected!**\n\n"
-                    "Please connect a channel first using `/connect`",
-                    parse_mode=ParseMode.MARKDOWN
+                    "❌ No channels connected!\n\n"
+                    "Please connect a channel first using /connect"
                 )
             return False
         
@@ -798,20 +768,18 @@ class ColorfulButtonBot:
             clean_text, button_rows = self.parse_button_markup(content)
             reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
             
+            # Send without markdown to avoid parsing errors
             result = await context.bot.send_message(
                 chat_id=int(target_channel["channel_id"]),
                 text=clean_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=reply_markup,
-                disable_web_page_preview=False
+                reply_markup=reply_markup
             )
             
             if update.message:
                 await update.message.reply_text(
-                    f"✅ **Post published successfully!**\n\n"
-                    f"**Channel:** {target_channel['channel_title']}\n"
-                    f"**Message ID:** {result.message_id}",
-                    parse_mode=ParseMode.MARKDOWN
+                    f"✅ Post published successfully!\n\n"
+                    f"Channel: {target_channel['channel_title']}\n"
+                    f"Message ID: {result.message_id}"
                 )
             return True
             
@@ -829,9 +797,8 @@ class ColorfulButtonBot:
         
         if not channels:
             await update.message.reply_text(
-                "❌ **No channels connected!**\n\n"
-                "Please connect a channel first using `/connect`",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ No channels connected!\n\n"
+                "Please connect a channel first using /connect"
             )
             return
         
@@ -852,9 +819,8 @@ class ColorfulButtonBot:
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_post")])
         
         await update.message.reply_text(
-            "📢 **Select Channel to Post** 📢\n\n"
+            "📢 Select Channel to Post 📢\n\n"
             "Choose which channel you want to post to:",
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -876,18 +842,16 @@ class ColorfulButtonBot:
             ]
             
             await update.message.reply_text(
-                "✨ **Post Created!** ✨\n\n"
+                "✨ Post Created! ✨\n\n"
                 "What would you like to do next?",
-                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
             await update.message.reply_text(
                 "⚠️ Please use button markup!\n\n"
                 "Example:\n"
-                "`<button primary>Click Me</button>`\n\n"
-                "Use /help to see all options.",
-                parse_mode=ParseMode.MARKDOWN
+                "<button primary>Click Me</button>\n\n"
+                "Use /help to see all options."
             )
     
     @require_auth
@@ -899,9 +863,7 @@ class ColorfulButtonBot:
         
         await update.message.reply_text(
             clean_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup,
-            disable_web_page_preview=False
+            reply_markup=reply_markup
         )
     
     @require_auth
@@ -921,9 +883,9 @@ class ColorfulButtonBot:
                 ("simple", "Simple text with button", 
                  "Hello World!\n\n<button primary>Click Me</button>"),
                 ("announcement", "Announcement template",
-                 "📢 **Announcement**\n\nImportant message here!\n\n<button primary>Read More</button>"),
+                 "📢 Announcement\n\nImportant message here!\n\n<button primary>Read More</button>"),
                 ("poll", "Quick poll",
-                 "🗳️ **Quick Poll**\n\nDo you agree?\n\n<button success>✅ Yes</button>\n<button danger>❌ No</button>"),
+                 "🗳️ Quick Poll\n\nDo you agree?\n\n<button success>✅ Yes</button>\n<button danger>❌ No</button>"),
             ]
             
             for template_id, title, content in templates:
@@ -934,10 +896,7 @@ class ColorfulButtonBot:
                     InlineQueryResultArticle(
                         id=template_id,
                         title=title,
-                        input_message_content=InputTextMessageContent(
-                            clean_text,
-                            parse_mode=ParseMode.MARKDOWN
-                        ),
+                        input_message_content=InputTextMessageContent(clean_text),
                         reply_markup=reply_markup,
                         description=f"Template: {title}"
                     )
@@ -950,10 +909,7 @@ class ColorfulButtonBot:
                 InlineQueryResultArticle(
                     id="colored_post",
                     title="🎨 Colored Post",
-                    input_message_content=InputTextMessageContent(
-                        clean_text,
-                        parse_mode=ParseMode.MARKDOWN
-                    ),
+                    input_message_content=InputTextMessageContent(clean_text),
                     reply_markup=reply_markup,
                     description=query[:50]
                 )
@@ -978,15 +934,15 @@ class ColorfulButtonBot:
             await update.message.reply_text("No authorized users found.")
             return
         
-        user_list = "👥 **Authorized Users**\n\n"
+        user_list = "👥 Authorized Users\n\n"
         for uid, name, role, date in users:
-            user_list += f"**ID:** `{uid}`\n"
-            user_list += f"**Name:** {name}\n"
-            user_list += f"**Role:** {role.upper()}\n"
-            user_list += f"**Added:** {date[:10]}\n"
+            user_list += f"ID: {uid}\n"
+            user_list += f"Name: {name}\n"
+            user_list += f"Role: {role.upper()}\n"
+            user_list += f"Added: {date[:10]}\n"
             user_list += "───────────\n"
         
-        await update.message.reply_text(user_list, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(user_list)
     
     @require_auth
     async def add_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1000,9 +956,8 @@ class ColorfulButtonBot:
         args = context.args
         if len(args) < 2:
             await update.message.reply_text(
-                "❌ Usage: `/adduser USER_ID USER_NAME`\n"
-                "Example: `/adduser 123456789 John Doe`",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ Usage: /adduser USER_ID USER_NAME\n"
+                "Example: /adduser 123456789 John Doe"
             )
             return
         
@@ -1019,12 +974,11 @@ class ColorfulButtonBot:
             
             if success:
                 await update.message.reply_text(
-                    f"✅ **User Added Successfully!**\n\n"
-                    f"ID: `{new_user_id}`\n"
+                    f"✅ User Added Successfully!\n\n"
+                    f"ID: {new_user_id}\n"
                     f"Name: {new_user_name}\n"
                     f"Role: USER\n\n"
-                    f"They can now use the bot.",
-                    parse_mode=ParseMode.MARKDOWN
+                    f"They can now use the bot."
                 )
             else:
                 await update.message.reply_text("❌ User already exists or invalid data.")
@@ -1043,9 +997,8 @@ class ColorfulButtonBot:
         args = context.args
         if not args:
             await update.message.reply_text(
-                "❌ Usage: `/removeuser USER_ID`\n"
-                "Example: `/removeuser 123456789`",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ Usage: /removeuser USER_ID\n"
+                "Example: /removeuser 123456789"
             )
             return
         
@@ -1055,10 +1008,9 @@ class ColorfulButtonBot:
             
             if success:
                 await update.message.reply_text(
-                    f"✅ **User Removed Successfully!**\n\n"
-                    f"ID: `{remove_user_id}`\n\n"
-                    f"This user can no longer access the bot.",
-                    parse_mode=ParseMode.MARKDOWN
+                    f"✅ User Removed Successfully!\n\n"
+                    f"ID: {remove_user_id}\n\n"
+                    f"This user can no longer access the bot."
                 )
             else:
                 await update.message.reply_text("❌ User not found or cannot remove super admin.")
@@ -1077,10 +1029,9 @@ class ColorfulButtonBot:
         args = context.args
         if len(args) < 2:
             await update.message.reply_text(
-                "❌ Usage: `/setadmin USER_ID ROLE`\n"
-                "Roles: `admin`, `user`\n"
-                "Example: `/setadmin 123456789 admin`",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ Usage: /setadmin USER_ID ROLE\n"
+                "Roles: admin, user\n"
+                "Example: /setadmin 123456789 admin"
             )
             return
         
@@ -1096,11 +1047,10 @@ class ColorfulButtonBot:
             
             if success:
                 await update.message.reply_text(
-                    f"✅ **User Role Updated!**\n\n"
-                    f"ID: `{target_user_id}`\n"
+                    f"✅ User Role Updated!\n\n"
+                    f"ID: {target_user_id}\n"
                     f"New Role: {new_role.upper()}\n\n"
-                    f"The user's permissions have been updated.",
-                    parse_mode=ParseMode.MARKDOWN
+                    f"The user's permissions have been updated."
                 )
             else:
                 await update.message.reply_text("❌ Cannot update role. User not found or is super admin.")
@@ -1124,8 +1074,7 @@ class ColorfulButtonBot:
             if len(parts) >= 2:
                 color = parts[1]
                 await query.edit_message_text(
-                    text=f"You clicked the {color} button!\n\nOriginal message:\n{query.message.text}",
-                    parse_mode=ParseMode.MARKDOWN
+                    text=f"You clicked the {color} button!\n\nOriginal message:\n{query.message.text}"
                 )
         
         elif data == "new_post":
@@ -1168,17 +1117,15 @@ class ColorfulButtonBot:
         elif data == "copy_message":
             content = context.user_data.get('post_content', 'No content')
             await query.message.reply_text(
-                f"📋 **Copy this message:**\n\n"
-                f"```\n{content}\n```",
-                parse_mode=ParseMode.MARKDOWN
+                f"📋 Copy this message:\n\n{content}"
             )
         
         elif data == "color_guide":
-            guide = "🎨 **Color Guide** 🎨\n\n"
+            guide = "🎨 Color Guide 🎨\n\n"
             for color in self.BUTTON_STYLES.keys():
-                guide += f"• `{color}` - {color.upper()} button\n"
-            guide += "\n**Usage:**\n`<button color>Your Text</button>`"
-            await query.message.reply_text(guide, parse_mode=ParseMode.MARKDOWN)
+                guide += f"• {color} - {color.upper()} button\n"
+            guide += "\nUsage:\n<button color>Your Text</button>"
+            await query.message.reply_text(guide)
         
         elif data == "examples":
             await self.templates_command(update, context)
