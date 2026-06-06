@@ -8,8 +8,9 @@ import re
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ParseMode, User, Chat, ChatMember
+    User, Chat, ChatMember
 )
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, InlineQueryHandler
@@ -796,7 +797,7 @@ class ColorfulButtonBot:
             reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
             
             result = await context.bot.send_message(
-                chat_id=target_channel["channel_id"],
+                chat_id=int(target_channel["channel_id"]),
                 text=clean_text,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup,
@@ -1142,7 +1143,8 @@ class ColorfulButtonBot:
         
         elif data.startswith("post_to_"):
             channel_id = data[8:]
-            context.user_data['post_content'] = context.user_data.get('post_content', 'Test post with buttons!\n\n<button primary>Click Me</button>')
+            if not context.user_data.get('post_content'):
+                context.user_data['post_content'] = "Test post with buttons!\n\n<button primary>Click Me</button>"
             await self.post_to_channel(update, context, channel_id, user_id)
         
         elif data.startswith("disconnect_"):
