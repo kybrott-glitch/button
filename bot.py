@@ -33,13 +33,6 @@ ADMIN_USER_ID = 1899208318  # Replace with your Telegram user ID (Main Admin)
 # File to store data
 AUTH_FILE = "authorized_users.json"
 
-def escape_markdown(text: str) -> str:
-    """Escape special characters for MarkdownV2"""
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
-
 class UserManager:
     """Manage authorized users and admins"""
     
@@ -253,12 +246,30 @@ class ColorfulButtonBot:
         async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id = update.effective_user.id
             if not self.check_auth(user_id):
-                await update.message.reply_text(
-                    "⛔ Access Denied!\n\nYou are not authorized to use this bot.\n\nPlease contact the bot administrator to request access.\n\nIf you have an authorization code, use:\n/auth YOUR_CODE"
-                )
+                # Handle both message and callback query
+                if update.message:
+                    await update.message.reply_text(
+                        "⛔ Access Denied!\n\nYou are not authorized to use this bot."
+                    )
+                elif update.callback_query:
+                    await update.callback_query.message.reply_text(
+                        "⛔ Access Denied!\n\nYou are not authorized to use this bot."
+                    )
                 return
             return await func(self, update, context)
         return wrapper
+    
+    async def send_message_safely(self, update: Update, text: str, reply_markup=None):
+        """Send message safely from either message or callback query"""
+        try:
+            if update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup)
+            elif update.callback_query and update.callback_query.message:
+                await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                logger.error("Cannot send message: no valid chat context")
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command - Public access"""
@@ -295,10 +306,7 @@ class ColorfulButtonBot:
                 "/removeuser - Remove user\n"
                 "/setadmin - Make user admin"
             )
-            await update.message.reply_text(
-                welcome_text,
-                reply_markup=self.get_main_keyboard()
-            )
+            await update.message.reply_text(welcome_text, reply_markup=self.get_main_keyboard())
         else:
             await update.message.reply_text(
                 f"🔐 Welcome {user.first_name} 🔐\n\n"
@@ -365,7 +373,8 @@ class ColorfulButtonBot:
         if not self.check_auth(user_id):
             return
         
-        await update.message.reply_text(
+        await self.send_message_safely(
+            update,
             "🔗 Connect a Channel 🔗\n\n"
             "To connect your channel to this bot:\n\n"
             "1. Add this bot as admin to your channel\n"
@@ -474,7 +483,8 @@ class ColorfulButtonBot:
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            await update.message.reply_text(
+            await self.send_message_safely(
+                update,
                 "📢 No Channels Connected 📢\n\n"
                 "You haven't connected any channels yet.\n\n"
                 "To connect a channel:\n"
@@ -495,7 +505,17 @@ class ColorfulButtonBot:
                 channel_list += f"   Username: @{channel['channel_username']}\n"
             channel_list += f"   Connected: {channel['connected_date'][:10]}\n\n"
         
-        await update.message.reply_text(channel_list)
+        # Create keyboard for channels
+        keyboard = []
+        for channel in channels:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📤 Post to {channel['channel_title'][:20]}",
+                    callback_data=f"post_to_{channel['channel_id']}"
+                )
+            ])
+        
+        await self.send_message_safely(update, channel_list, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def disconnect_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Disconnect a channel"""
@@ -507,7 +527,7 @@ class ColorfulButtonBot:
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            await update.message.reply_text("❌ You don't have any connected channels!")
+            await self.send_message_safely(update, "❌ You don't have any connected channels!")
             return
         
         keyboard = []
@@ -521,9 +541,9 @@ class ColorfulButtonBot:
         
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_disconnect")])
         
-        await update.message.reply_text(
-            "🗑️ Select channel to disconnect:\n\n"
-            "This will remove the channel from your bot access.",
+        await self.send_message_safely(
+            update,
+            "🗑️ Select channel to disconnect:\n\nThis will remove the channel from your bot access.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -537,7 +557,7 @@ class ColorfulButtonBot:
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            await update.message.reply_text("❌ You don't have any connected channels!")
+            await self.send_message_safely(update, "❌ You don't have any connected channels!")
             return
         
         keyboard = []
@@ -552,10 +572,9 @@ class ColorfulButtonBot:
         
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_default")])
         
-        await update.message.reply_text(
-            "⭐ Set Default Channel ⭐\n\n"
-            "Select which channel should be your default for posting.\n"
-            "The default channel will be used when you don't specify one.",
+        await self.send_message_safely(
+            update,
+            "⭐ Set Default Channel ⭐\n\nSelect which channel should be your default for posting.\nThe default channel will be used when you don't specify one.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -609,7 +628,7 @@ class ColorfulButtonBot:
                 "/setadmin - Make user admin"
             )
         
-        await update.message.reply_text(help_text)
+        await self.send_message_safely(update, help_text)
     
     def get_main_keyboard(self):
         """Create main keyboard with colorful buttons"""
@@ -650,9 +669,9 @@ class ColorfulButtonBot:
             ]
         ]
         
-        await update.message.reply_text(
-            "🎨 Choose Post Type\n\n"
-            "What kind of post would you like to create?",
+        await self.send_message_safely(
+            update,
+            "🎨 Choose Post Type\n\nWhat kind of post would you like to create?",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
@@ -689,7 +708,7 @@ class ColorfulButtonBot:
             "<button info>🔔 Remind Me</button>"
         )
         
-        await update.message.reply_text(templates)
+        await self.send_message_safely(update, templates)
     
     def parse_button_markup(self, text: str) -> tuple:
         """Parse custom button markup and return (clean_text, buttons)"""
@@ -729,18 +748,16 @@ class ColorfulButtonBot:
             user_id = update.effective_user.id
         
         if not context.user_data.get('post_content'):
-            if update.message:
-                await update.message.reply_text("❌ No post created yet!\nUse /newpost first.")
+            await self.send_message_safely(update, "❌ No post created yet!\nUse /newpost first.")
             return False
         
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            if update.message:
-                await update.message.reply_text(
-                    "❌ No channels connected!\n\n"
-                    "Please connect a channel first using /connect"
-                )
+            await self.send_message_safely(
+                update,
+                "❌ No channels connected!\n\nPlease connect a channel first using /connect"
+            )
             return False
         
         target_channel = None
@@ -759,8 +776,7 @@ class ColorfulButtonBot:
                 target_channel = channels[0]
         
         if not target_channel:
-            if update.message:
-                await update.message.reply_text("❌ No valid channel found!")
+            await self.send_message_safely(update, "❌ No valid channel found!")
             return False
         
         try:
@@ -768,25 +784,23 @@ class ColorfulButtonBot:
             clean_text, button_rows = self.parse_button_markup(content)
             reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
             
-            # Send without markdown to avoid parsing errors
             result = await context.bot.send_message(
                 chat_id=int(target_channel["channel_id"]),
                 text=clean_text,
                 reply_markup=reply_markup
             )
             
-            if update.message:
-                await update.message.reply_text(
-                    f"✅ Post published successfully!\n\n"
-                    f"Channel: {target_channel['channel_title']}\n"
-                    f"Message ID: {result.message_id}"
-                )
+            await self.send_message_safely(
+                update,
+                f"✅ Post published successfully!\n\n"
+                f"Channel: {target_channel['channel_title']}\n"
+                f"Message ID: {result.message_id}"
+            )
             return True
             
         except Exception as e:
             error_msg = f"❌ Error posting to channel: {str(e)}"
-            if update.message:
-                await update.message.reply_text(error_msg)
+            await self.send_message_safely(update, error_msg)
             return False
     
     @require_auth
@@ -796,14 +810,14 @@ class ColorfulButtonBot:
         channels = self.user_manager.get_user_channels(user_id)
         
         if not channels:
-            await update.message.reply_text(
-                "❌ No channels connected!\n\n"
-                "Please connect a channel first using /connect"
+            await self.send_message_safely(
+                update,
+                "❌ No channels connected!\n\nPlease connect a channel first using /connect"
             )
             return
         
         if not context.user_data.get('post_content'):
-            await update.message.reply_text("❌ No post created yet!\nUse /newpost first.")
+            await self.send_message_safely(update, "❌ No post created yet!\nUse /newpost first.")
             return
         
         keyboard = []
@@ -818,9 +832,9 @@ class ColorfulButtonBot:
         
         keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_post")])
         
-        await update.message.reply_text(
-            "📢 Select Channel to Post 📢\n\n"
-            "Choose which channel you want to post to:",
+        await self.send_message_safely(
+            update,
+            "📢 Select Channel to Post 📢\n\nChoose which channel you want to post to:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -842,16 +856,12 @@ class ColorfulButtonBot:
             ]
             
             await update.message.reply_text(
-                "✨ Post Created! ✨\n\n"
-                "What would you like to do next?",
+                "✨ Post Created! ✨\n\nWhat would you like to do next?",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
             await update.message.reply_text(
-                "⚠️ Please use button markup!\n\n"
-                "Example:\n"
-                "<button primary>Click Me</button>\n\n"
-                "Use /help to see all options."
+                "⚠️ Please use button markup!\n\nExample:\n<button primary>Click Me</button>\n\nUse /help to see all options."
             )
     
     @require_auth
@@ -861,10 +871,7 @@ class ColorfulButtonBot:
         clean_text, button_rows = self.parse_button_markup(content)
         reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
         
-        await update.message.reply_text(
-            clean_text,
-            reply_markup=reply_markup
-        )
+        await update.message.reply_text(clean_text, reply_markup=reply_markup)
     
     @require_auth
     async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -925,13 +932,13 @@ class ColorfulButtonBot:
         user_id = update.effective_user.id
         
         if not self.user_manager.is_admin(user_id):
-            await update.message.reply_text("⛔ Admin access required!")
+            await self.send_message_safely(update, "⛔ Admin access required!")
             return
         
         users = self.user_manager.list_users()
         
         if not users:
-            await update.message.reply_text("No authorized users found.")
+            await self.send_message_safely(update, "No authorized users found.")
             return
         
         user_list = "👥 Authorized Users\n\n"
@@ -942,7 +949,7 @@ class ColorfulButtonBot:
             user_list += f"Added: {date[:10]}\n"
             user_list += "───────────\n"
         
-        await update.message.reply_text(user_list)
+        await self.send_message_safely(update, user_list)
     
     @require_auth
     async def add_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -950,14 +957,14 @@ class ColorfulButtonBot:
         user_id = update.effective_user.id
         
         if not self.user_manager.is_admin(user_id):
-            await update.message.reply_text("⛔ Admin access required!")
+            await self.send_message_safely(update, "⛔ Admin access required!")
             return
         
         args = context.args
         if len(args) < 2:
-            await update.message.reply_text(
-                "❌ Usage: /adduser USER_ID USER_NAME\n"
-                "Example: /adduser 123456789 John Doe"
+            await self.send_message_safely(
+                update,
+                "❌ Usage: /adduser USER_ID USER_NAME\nExample: /adduser 123456789 John Doe"
             )
             return
         
@@ -973,17 +980,14 @@ class ColorfulButtonBot:
             )
             
             if success:
-                await update.message.reply_text(
-                    f"✅ User Added Successfully!\n\n"
-                    f"ID: {new_user_id}\n"
-                    f"Name: {new_user_name}\n"
-                    f"Role: USER\n\n"
-                    f"They can now use the bot."
+                await self.send_message_safely(
+                    update,
+                    f"✅ User Added Successfully!\n\nID: {new_user_id}\nName: {new_user_name}\nRole: USER\n\nThey can now use the bot."
                 )
             else:
-                await update.message.reply_text("❌ User already exists or invalid data.")
+                await self.send_message_safely(update, "❌ User already exists or invalid data.")
         except ValueError:
-            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+            await self.send_message_safely(update, "❌ Invalid User ID! Must be a number.")
     
     @require_auth
     async def remove_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -991,14 +995,14 @@ class ColorfulButtonBot:
         user_id = update.effective_user.id
         
         if not self.user_manager.is_admin(user_id):
-            await update.message.reply_text("⛔ Admin access required!")
+            await self.send_message_safely(update, "⛔ Admin access required!")
             return
         
         args = context.args
         if not args:
-            await update.message.reply_text(
-                "❌ Usage: /removeuser USER_ID\n"
-                "Example: /removeuser 123456789"
+            await self.send_message_safely(
+                update,
+                "❌ Usage: /removeuser USER_ID\nExample: /removeuser 123456789"
             )
             return
         
@@ -1007,15 +1011,14 @@ class ColorfulButtonBot:
             success = self.user_manager.remove_user(remove_user_id)
             
             if success:
-                await update.message.reply_text(
-                    f"✅ User Removed Successfully!\n\n"
-                    f"ID: {remove_user_id}\n\n"
-                    f"This user can no longer access the bot."
+                await self.send_message_safely(
+                    update,
+                    f"✅ User Removed Successfully!\n\nID: {remove_user_id}\n\nThis user can no longer access the bot."
                 )
             else:
-                await update.message.reply_text("❌ User not found or cannot remove super admin.")
+                await self.send_message_safely(update, "❌ User not found or cannot remove super admin.")
         except ValueError:
-            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+            await self.send_message_safely(update, "❌ Invalid User ID! Must be a number.")
     
     @require_auth
     async def set_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1023,15 +1026,14 @@ class ColorfulButtonBot:
         user_id = update.effective_user.id
         
         if not self.user_manager.is_super_admin(user_id):
-            await update.message.reply_text("⛔ Super Admin access required!")
+            await self.send_message_safely(update, "⛔ Super Admin access required!")
             return
         
         args = context.args
         if len(args) < 2:
-            await update.message.reply_text(
-                "❌ Usage: /setadmin USER_ID ROLE\n"
-                "Roles: admin, user\n"
-                "Example: /setadmin 123456789 admin"
+            await self.send_message_safely(
+                update,
+                "❌ Usage: /setadmin USER_ID ROLE\nRoles: admin, user\nExample: /setadmin 123456789 admin"
             )
             return
         
@@ -1040,22 +1042,20 @@ class ColorfulButtonBot:
             new_role = args[1].lower()
             
             if new_role not in ["admin", "user"]:
-                await update.message.reply_text("❌ Invalid role! Use 'admin' or 'user'.")
+                await self.send_message_safely(update, "❌ Invalid role! Use 'admin' or 'user'.")
                 return
             
             success = self.user_manager.update_role(target_user_id, new_role)
             
             if success:
-                await update.message.reply_text(
-                    f"✅ User Role Updated!\n\n"
-                    f"ID: {target_user_id}\n"
-                    f"New Role: {new_role.upper()}\n\n"
-                    f"The user's permissions have been updated."
+                await self.send_message_safely(
+                    update,
+                    f"✅ User Role Updated!\n\nID: {target_user_id}\nNew Role: {new_role.upper()}\n\nThe user's permissions have been updated."
                 )
             else:
-                await update.message.reply_text("❌ Cannot update role. User not found or is super admin.")
+                await self.send_message_safely(update, "❌ Cannot update role. User not found or is super admin.")
         except ValueError:
-            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+            await self.send_message_safely(update, "❌ Invalid User ID! Must be a number.")
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle button callbacks"""
@@ -1078,25 +1078,36 @@ class ColorfulButtonBot:
                 )
         
         elif data == "new_post":
-            await self.new_post_command(update, context)
+            # Create a fake update with message from callback
+            class FakeUpdate:
+                def __init__(self, message):
+                    self.message = message
+                    self.effective_user = query.from_user
+            fake_update = FakeUpdate(query.message)
+            await self.new_post_command(fake_update, context)
         
         elif data == "templates":
-            await self.templates_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.templates_command(fake_update, context)
         
         elif data == "list_channels":
-            await self.list_channels_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.list_channels_command(fake_update, context)
         
         elif data == "connect_channel":
-            await self.connect_channel_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.connect_channel_command(fake_update, context)
         
         elif data == "post_to_channel":
-            await self.post_now_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.post_now_command(fake_update, context)
         
         elif data.startswith("post_to_"):
             channel_id = data[8:]
             if not context.user_data.get('post_content'):
                 context.user_data['post_content'] = "Test post with buttons!\n\n<button primary>Click Me</button>"
-            await self.post_to_channel(update, context, channel_id, user_id)
+            fake_update = FakeUpdate(query.message)
+            await self.post_to_channel(fake_update, context, channel_id, user_id)
         
         elif data.startswith("disconnect_"):
             channel_id = data[11:]
@@ -1116,9 +1127,7 @@ class ColorfulButtonBot:
         
         elif data == "copy_message":
             content = context.user_data.get('post_content', 'No content')
-            await query.message.reply_text(
-                f"📋 Copy this message:\n\n{content}"
-            )
+            await query.message.reply_text(f"📋 Copy this message:\n\n{content}")
         
         elif data == "color_guide":
             guide = "🎨 Color Guide 🎨\n\n"
@@ -1128,10 +1137,12 @@ class ColorfulButtonBot:
             await query.message.reply_text(guide)
         
         elif data == "examples":
-            await self.templates_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.templates_command(fake_update, context)
         
         elif data == "help":
-            await self.help_command(update, context)
+            fake_update = FakeUpdate(query.message)
+            await self.help_command(fake_update, context)
         
         elif data in ["cancel_post", "cancel_disconnect", "cancel_default", "edit_post", "back_to_menu"]:
             await query.message.reply_text("Operation cancelled.")
