@@ -26,8 +26,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your bot token
-ADMIN_USER_ID = 123456789  # Replace with your Telegram user ID (Main Admin)
+BOT_TOKEN = "8651990559:AAHk3DToBDJCgz57OJf88AtqcLLiS-S2myk"  # Replace with your bot token
+ADMIN_USER_ID = 1899208318  # Replace with your Telegram user ID (Main Admin)
 
 # File to store data
 AUTH_FILE = "authorized_users.json"
