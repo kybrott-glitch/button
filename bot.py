@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("7878932594:AAE73-qSjp9AmostlZLDqHthBQUKiYuIsgQ", "7878932594:AAE73-qSjp9AmostlZLDqHthBQUKiYuIsgQ")
 CHANNELS_FILE = "channels.json"
 
 # ─── Conversation states ──────────────────────────────────────────────────────
