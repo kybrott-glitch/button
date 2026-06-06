@@ -915,4 +915,289 @@ class ColorfulButtonBot:
         
         if not query:
             templates = [
-                ("simple",
+                ("simple", "Simple text with button", 
+                 "Hello World!\n\n<button primary>Click Me</button>"),
+                ("announcement", "Announcement template",
+                 "📢 **Announcement**\n\nImportant message here!\n\n<button primary>Read More</button>"),
+                ("poll", "Quick poll",
+                 "🗳️ **Quick Poll**\n\nDo you agree?\n\n<button success>✅ Yes</button>\n<button danger>❌ No</button>"),
+            ]
+            
+            for template_id, title, content in templates:
+                clean_text, button_rows = self.parse_button_markup(content)
+                reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
+                
+                results.append(
+                    InlineQueryResultArticle(
+                        id=template_id,
+                        title=title,
+                        input_message_content=InputTextMessageContent(
+                            clean_text,
+                            parse_mode=ParseMode.MARKDOWN
+                        ),
+                        reply_markup=reply_markup,
+                        description=f"Template: {title}"
+                    )
+                )
+        else:
+            clean_text, button_rows = self.parse_button_markup(query)
+            reply_markup = InlineKeyboardMarkup(button_rows) if button_rows else None
+            
+            results.append(
+                InlineQueryResultArticle(
+                    id="colored_post",
+                    title="🎨 Colored Post",
+                    input_message_content=InputTextMessageContent(
+                        clean_text,
+                        parse_mode=ParseMode.MARKDOWN
+                    ),
+                    reply_markup=reply_markup,
+                    description=query[:50]
+                )
+            )
+        
+        await update.inline_query.answer(results, cache_time=5)
+    
+    # Admin Commands
+    
+    @require_auth
+    async def list_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all authorized users (Admin only)"""
+        user_id = update.effective_user.id
+        
+        if not self.user_manager.is_admin(user_id):
+            await update.message.reply_text("⛔ Admin access required!")
+            return
+        
+        users = self.user_manager.list_users()
+        
+        if not users:
+            await update.message.reply_text("No authorized users found.")
+            return
+        
+        user_list = "👥 **Authorized Users**\n\n"
+        for uid, name, role, date in users:
+            user_list += f"**ID:** `{uid}`\n"
+            user_list += f"**Name:** {name}\n"
+            user_list += f"**Role:** {role.upper()}\n"
+            user_list += f"**Added:** {date[:10]}\n"
+            user_list += "───────────\n"
+        
+        await update.message.reply_text(user_list, parse_mode=ParseMode.MARKDOWN)
+    
+    @require_auth
+    async def add_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add a new user (Admin only)"""
+        user_id = update.effective_user.id
+        
+        if not self.user_manager.is_admin(user_id):
+            await update.message.reply_text("⛔ Admin access required!")
+            return
+        
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text(
+                "❌ Usage: `/adduser USER_ID USER_NAME`\n"
+                "Example: `/adduser 123456789 John Doe`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            new_user_id = int(args[0])
+            new_user_name = ' '.join(args[1:])
+            
+            success = self.user_manager.add_user(
+                new_user_id,
+                new_user_name,
+                user_id,
+                "user"
+            )
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **User Added Successfully!**\n\n"
+                    f"ID: `{new_user_id}`\n"
+                    f"Name: {new_user_name}\n"
+                    f"Role: USER\n\n"
+                    f"They can now use the bot.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text("❌ User already exists or invalid data.")
+        except ValueError:
+            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+    
+    @require_auth
+    async def remove_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Remove a user (Admin only)"""
+        user_id = update.effective_user.id
+        
+        if not self.user_manager.is_admin(user_id):
+            await update.message.reply_text("⛔ Admin access required!")
+            return
+        
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "❌ Usage: `/removeuser USER_ID`\n"
+                "Example: `/removeuser 123456789`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            remove_user_id = int(args[0])
+            success = self.user_manager.remove_user(remove_user_id)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **User Removed Successfully!**\n\n"
+                    f"ID: `{remove_user_id}`\n\n"
+                    f"This user can no longer access the bot.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text("❌ User not found or cannot remove super admin.")
+        except ValueError:
+            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+    
+    @require_auth
+    async def set_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Make a user admin (Super Admin only)"""
+        user_id = update.effective_user.id
+        
+        if not self.user_manager.is_super_admin(user_id):
+            await update.message.reply_text("⛔ Super Admin access required!")
+            return
+        
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text(
+                "❌ Usage: `/setadmin USER_ID ROLE`\n"
+                "Roles: `admin`, `user`\n"
+                "Example: `/setadmin 123456789 admin`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            target_user_id = int(args[0])
+            new_role = args[1].lower()
+            
+            if new_role not in ["admin", "user"]:
+                await update.message.reply_text("❌ Invalid role! Use 'admin' or 'user'.")
+                return
+            
+            success = self.user_manager.update_role(target_user_id, new_role)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **User Role Updated!**\n\n"
+                    f"ID: `{target_user_id}`\n"
+                    f"New Role: {new_role.upper()}\n\n"
+                    f"The user's permissions have been updated.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text("❌ Cannot update role. User not found or is super admin.")
+        except ValueError:
+            await update.message.reply_text("❌ Invalid User ID! Must be a number.")
+    
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle button callbacks"""
+        query = update.callback_query
+        user_id = query.from_user.id
+        
+        if not self.check_auth(user_id):
+            await query.answer("⛔ You are not authorized to use this bot!", show_alert=True)
+            return
+        
+        await query.answer()
+        data = query.data
+        
+        if data.startswith("btn_"):
+            parts = data.split('_', 2)
+            if len(parts) >= 2:
+                color = parts[1]
+                await query.edit_message_text(
+                    text=f"You clicked the {color} button!\n\nOriginal message:\n{query.message.text}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        
+        elif data == "new_post":
+            await self.new_post_command(update, context)
+        
+        elif data == "templates":
+            await self.templates_command(update, context)
+        
+        elif data == "list_channels":
+            await self.list_channels_command(update, context)
+        
+        elif data == "connect_channel":
+            await self.connect_channel_command(update, context)
+        
+        elif data == "post_to_channel":
+            await self.post_now_command(update, context)
+        
+        elif data.startswith("post_to_"):
+            channel_id = data[8:]
+            context.user_data['post_content'] = context.user_data.get('post_content', 'Test post with buttons!\n\n<button primary>Click Me</button>')
+            await self.post_to_channel(update, context, channel_id, user_id)
+        
+        elif data.startswith("disconnect_"):
+            channel_id = data[11:]
+            success = self.user_manager.remove_user_channel(user_id, channel_id)
+            if success:
+                await query.message.reply_text(f"✅ Channel disconnected successfully!")
+            else:
+                await query.message.reply_text(f"❌ Failed to disconnect channel.")
+        
+        elif data.startswith("setdefault_"):
+            channel_id = data[11:]
+            success = self.user_manager.set_default_channel(user_id, channel_id)
+            if success:
+                await query.message.reply_text(f"⭐ Default channel updated successfully!")
+            else:
+                await query.message.reply_text(f"❌ Failed to update default channel.")
+        
+        elif data == "copy_message":
+            content = context.user_data.get('post_content', 'No content')
+            await query.message.reply_text(
+                f"📋 **Copy this message:**\n\n"
+                f"```\n{content}\n```",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        
+        elif data == "color_guide":
+            guide = "🎨 **Color Guide** 🎨\n\n"
+            for color in self.BUTTON_STYLES.keys():
+                guide += f"• `{color}` - {color.upper()} button\n"
+            guide += "\n**Usage:**\n`<button color>Your Text</button>`"
+            await query.message.reply_text(guide, parse_mode=ParseMode.MARKDOWN)
+        
+        elif data == "examples":
+            await self.templates_command(update, context)
+        
+        elif data == "help":
+            await self.help_command(update, context)
+        
+        elif data in ["cancel_post", "cancel_disconnect", "cancel_default", "edit_post", "back_to_menu"]:
+            await query.message.reply_text("Operation cancelled.")
+    
+    async def run(self):
+        """Start the bot"""
+        logger.info("Bot is starting...")
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
+        logger.info("Bot is running!")
+        await asyncio.Event().wait()
+
+def main():
+    """Main function to run the bot"""
+    bot = ColorfulButtonBot(BOT_TOKEN)
+    asyncio.run(bot.run())
+
+if __name__ == '__main__':
+    main()
