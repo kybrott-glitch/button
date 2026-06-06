@@ -1,497 +1,641 @@
-"""
-Telegram Channel Post Bot
-Features:
-  - Add/remove channels
-  - Compose posts with rich text (HTML)
-  - Add colored inline buttons (URLs or callbacks)
-  - Use premium custom emojis in post text
-  - Preview post before publishing
-  - Publish to one or multiple connected channels
-"""
-
-import os
-import json
+import asyncio
 import logging
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    MessageEntity,
-)
-from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters,
-)
+from typing import Optional, Dict, List, Set, Tuple
+from datetime import datetime
+import json
+import os
+import re
 
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ParseMode, User, Chat, ChatMember
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, InlineQueryHandler
+)
+from telegram.inline.inlinequeryresultarticle import InlineQueryResultArticle
+from telegram.inline.inputtextmessagecontent import InputTextMessageContent
+from telegram.error import BadRequest
+
+# Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("7878932594:AAE73-qSjp9AmostlZLDqHthBQUKiYuIsgQ", "7878932594:AAE73-qSjp9AmostlZLDqHthBQUKiYuIsgQ")
-CHANNELS_FILE = "channels.json"
+# Configuration
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your bot token
+ADMIN_USER_ID = 123456789  # Replace with your Telegram user ID (Main Admin)
 
-# ─── Conversation states ──────────────────────────────────────────────────────
-(
-    MAIN_MENU,
-    ADD_CHANNEL,
-    COMPOSE_TEXT,
-    COMPOSE_BUTTONS,
-    ADDING_BUTTON_TEXT,
-    ADDING_BUTTON_URL,
-    ADDING_BUTTON_ROW,
-    SELECT_CHANNELS,
-    CONFIRM_POST,
-) = range(9)
+# File to store data
+AUTH_FILE = "authorized_users.json"
+CHANNELS_FILE = "connected_channels.json"
 
-
-# ─── Persistent channel store ─────────────────────────────────────────────────
-def load_channels() -> dict:
-    if os.path.exists(CHANNELS_FILE):
-        with open(CHANNELS_FILE) as f:
-            return json.load(f)
-    return {}
-
-
-def save_channels(data: dict):
-    with open(CHANNELS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-def build_main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Add Channel", callback_data="add_channel")],
-        [InlineKeyboardButton("✏️ Create Post", callback_data="create_post")],
-        [InlineKeyboardButton("📋 My Channels", callback_data="list_channels")],
-    ])
-
-
-def build_post_keyboard(buttons: list[list[dict]]) -> InlineKeyboardMarkup | None:
-    """Convert stored button dicts → InlineKeyboardMarkup."""
-    if not buttons:
-        return None
-    keyboard = []
-    for row in buttons:
-        keyboard.append([
-            InlineKeyboardButton(text=btn["text"], url=btn.get("url"))
-            for btn in row
-        ])
-    return InlineKeyboardMarkup(keyboard)
-
-
-def button_editor_keyboard(buttons: list[list[dict]]) -> InlineKeyboardMarkup:
-    rows = []
-    for ri, row in enumerate(buttons):
-        rows.append([
-            InlineKeyboardButton(f"❌ Row {ri+1}: {btn['text']}", callback_data=f"del_btn_{ri}_{bi}")
-            for bi, btn in enumerate(row)
-        ])
-    rows.append([InlineKeyboardButton("➕ Add Button", callback_data="add_btn")])
-    rows.append([
-        InlineKeyboardButton("👁 Preview", callback_data="preview_post"),
-        InlineKeyboardButton("✅ Done", callback_data="buttons_done"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-def channel_select_keyboard(channels: dict, selected: set) -> InlineKeyboardMarkup:
-    rows = []
-    for ch_id, ch_info in channels.items():
-        check = "✅" if ch_id in selected else "☑️"
-        rows.append([InlineKeyboardButton(
-            f"{check} {ch_info['title']}",
-            callback_data=f"toggle_ch_{ch_id}",
-        )])
-    rows.append([
-        InlineKeyboardButton("📤 Publish", callback_data="do_publish"),
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel_publish"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-# ─── /start ───────────────────────────────────────────────────────────────────
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
-    await update.message.reply_text(
-        "👋 <b>Channel Post Bot</b>\n\nCompose beautiful posts with inline buttons and premium emojis, then publish to your channels.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=build_main_menu(),
-    )
-    return MAIN_MENU
-
-
-# ─── Main menu dispatcher ─────────────────────────────────────────────────────
-async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "add_channel":
-        await query.edit_message_text(
-            "📢 <b>Add a Channel</b>\n\n"
-            "1. Add me as an <b>Admin</b> to your channel (with <i>Post Messages</i> permission).\n"
-            "2. Forward any message from that channel here, or send the channel username (e.g. <code>@mychannel</code>).",
-            parse_mode=ParseMode.HTML,
-        )
-        return ADD_CHANNEL
-
-    elif data == "create_post":
-        context.user_data["post"] = {"text": "", "entities": [], "buttons": []}
-        await query.edit_message_text(
-            "✏️ <b>Compose your post</b>\n\n"
-            "Send your post text now. You can use Telegram formatting:\n"
-            "• <b>bold</b>, <i>italic</i>, <code>code</code>, etc.\n"
-            "• Premium custom emojis will be preserved automatically.",
-            parse_mode=ParseMode.HTML,
-        )
-        return COMPOSE_TEXT
-
-    elif data == "list_channels":
-        channels = load_channels()
-        if not channels:
-            await query.edit_message_text(
-                "No channels added yet.\n\nUse <b>Add Channel</b> to get started.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]
-                ]),
-            )
-        else:
-            lines = [f"• <b>{v['title']}</b> (<code>{k}</code>)" for k, v in channels.items()]
-            await query.edit_message_text(
-                "📋 <b>Connected Channels</b>\n\n" + "\n".join(lines),
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑 Remove a Channel", callback_data="remove_channel_menu")],
-                    [InlineKeyboardButton("⬅️ Back", callback_data="back_main")],
-                ]),
-            )
-        return MAIN_MENU
-
-    elif data == "back_main":
-        await query.edit_message_text(
-            "👋 <b>Channel Post Bot</b>\n\nWhat would you like to do?",
-            parse_mode=ParseMode.HTML,
-            reply_markup=build_main_menu(),
-        )
-        return MAIN_MENU
-
-    elif data == "remove_channel_menu":
-        channels = load_channels()
-        rows = [[InlineKeyboardButton(f"🗑 {v['title']}", callback_data=f"rm_ch_{k}")] for k, v in channels.items()]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="back_main")])
-        await query.edit_message_text(
-            "Select a channel to remove:",
-            reply_markup=InlineKeyboardMarkup(rows),
-        )
-        return MAIN_MENU
-
-    elif data.startswith("rm_ch_"):
-        ch_id = data[len("rm_ch_"):]
-        channels = load_channels()
-        title = channels.pop(ch_id, {}).get("title", ch_id)
-        save_channels(channels)
-        await query.edit_message_text(
-            f"✅ Removed <b>{title}</b>.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_main")]]),
-        )
-        return MAIN_MENU
-
-    return MAIN_MENU
-
-
-# ─── Add channel ──────────────────────────────────────────────────────────────
-async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.message
-
-    # Forwarded message from channel
-    if msg.forward_origin and hasattr(msg.forward_origin, "chat"):
-        chat = msg.forward_origin.chat
-        ch_id = str(chat.id)
-        title = chat.title or ch_id
-    elif msg.text and msg.text.startswith("@"):
-        try:
-            chat = await context.bot.get_chat(msg.text.strip())
-            ch_id = str(chat.id)
-            title = chat.title or msg.text
-        except Exception as e:
-            await msg.reply_text(f"❌ Could not find channel: {e}")
-            return ADD_CHANNEL
-    else:
-        await msg.reply_text("Please forward a message from the channel or send its @username.")
-        return ADD_CHANNEL
-
-    # Verify bot is admin
-    try:
-        member = await context.bot.get_chat_member(ch_id, context.bot.id)
-        if member.status not in ("administrator", "creator"):
-            await msg.reply_text("❌ I'm not an admin in that channel. Please add me as admin first.")
-            return ADD_CHANNEL
-    except Exception as e:
-        await msg.reply_text(f"❌ Could not verify admin status: {e}")
-        return ADD_CHANNEL
-
-    channels = load_channels()
-    channels[ch_id] = {"title": title}
-    save_channels(channels)
-
-    await msg.reply_text(
-        f"✅ Channel <b>{title}</b> added successfully!",
-        parse_mode=ParseMode.HTML,
-        reply_markup=build_main_menu(),
-    )
-    return MAIN_MENU
-
-
-# ─── Compose post text ────────────────────────────────────────────────────────
-async def receive_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = update.message
-
-    # Store text + all entities (preserves custom emoji, bold, italic, etc.)
-    context.user_data["post"]["text"] = msg.text or msg.caption or ""
-    context.user_data["post"]["entities"] = [
-        e.to_dict() for e in (msg.entities or msg.caption_entities or [])
-    ]
-
-    await msg.reply_text(
-        "✅ Text saved!\n\nNow add <b>inline buttons</b> to your post (optional).\n"
-        "Each button can have a label and a URL.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=button_editor_keyboard(context.user_data["post"]["buttons"]),
-    )
-    return COMPOSE_BUTTONS
-
-
-# ─── Button editor ────────────────────────────────────────────────────────────
-async def button_editor_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    post = context.user_data["post"]
-
-    if data == "add_btn":
-        await query.edit_message_text(
-            "Enter the <b>button label</b> (text shown on the button):",
-            parse_mode=ParseMode.HTML,
-        )
-        context.user_data["adding_btn"] = {}
-        return ADDING_BUTTON_TEXT
-
-    elif data.startswith("del_btn_"):
-        _, _, ri, bi = data.split("_")
-        ri, bi = int(ri), int(bi)
-        if 0 <= ri < len(post["buttons"]) and 0 <= bi < len(post["buttons"][ri]):
-            post["buttons"][ri].pop(bi)
-            if not post["buttons"][ri]:
-                post["buttons"].pop(ri)
-        await query.edit_message_text(
-            "Button removed. Current buttons:",
-            reply_markup=button_editor_keyboard(post["buttons"]),
-        )
-        return COMPOSE_BUTTONS
-
-    elif data == "preview_post":
-        await send_preview(query, context)
-        return COMPOSE_BUTTONS
-
-    elif data == "buttons_done":
-        channels = load_channels()
-        if not channels:
-            await query.edit_message_text(
-                "⚠️ No channels connected. Add a channel first.",
-                reply_markup=build_main_menu(),
-            )
-            return MAIN_MENU
-
-        context.user_data["selected_channels"] = set()
-        await query.edit_message_text(
-            "📤 <b>Select channels to publish to:</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=channel_select_keyboard(channels, set()),
-        )
-        return SELECT_CHANNELS
-
-    return COMPOSE_BUTTONS
-
-
-async def receive_button_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["adding_btn"]["text"] = update.message.text.strip()
-    await update.message.reply_text("Now send the <b>URL</b> for this button:", parse_mode=ParseMode.HTML)
-    return ADDING_BUTTON_URL
-
-
-async def receive_button_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    url = update.message.text.strip()
-    if not url.startswith(("http://", "https://", "tg://")):
-        await update.message.reply_text("❌ Invalid URL. Must start with http://, https://, or tg://")
-        return ADDING_BUTTON_URL
-
-    btn = {**context.user_data["adding_btn"], "url": url}
-    post = context.user_data["post"]
-
-    await update.message.reply_text(
-        "Add this button to a <b>new row</b> or the <b>last row</b>?",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Same row as last", callback_data="btn_same_row"),
-                InlineKeyboardButton("New row", callback_data="btn_new_row"),
-            ]
-        ]),
-    )
-    context.user_data["pending_btn"] = btn
-    return ADDING_BUTTON_ROW
-
-
-async def receive_button_row(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    post = context.user_data["post"]
-    btn = context.user_data.pop("pending_btn")
-
-    if query.data == "btn_same_row" and post["buttons"]:
-        post["buttons"][-1].append(btn)
-    else:
-        post["buttons"].append([btn])
-
-    await query.edit_message_text(
-        "Button added! Continue adding buttons or click Done.",
-        reply_markup=button_editor_keyboard(post["buttons"]),
-    )
-    return COMPOSE_BUTTONS
-
-
-# ─── Channel selection & publish ─────────────────────────────────────────────
-async def channel_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    channels = load_channels()
-    selected = context.user_data["selected_channels"]
-
-    if data.startswith("toggle_ch_"):
-        ch_id = data[len("toggle_ch_"):]
-        if ch_id in selected:
-            selected.discard(ch_id)
-        else:
-            selected.add(ch_id)
-        await query.edit_message_reply_markup(channel_select_keyboard(channels, selected))
-        return SELECT_CHANNELS
-
-    elif data == "cancel_publish":
-        await query.edit_message_text("Cancelled.", reply_markup=build_main_menu())
-        return MAIN_MENU
-
-    elif data == "do_publish":
-        if not selected:
-            await query.answer("Select at least one channel!", show_alert=True)
-            return SELECT_CHANNELS
-
-        post = context.user_data["post"]
-        keyboard = build_post_keyboard(post["buttons"])
-        entities = [MessageEntity.de_json(e, context.bot) for e in post["entities"]]
-
-        results = []
-        for ch_id in selected:
-            title = channels[ch_id]["title"]
+class UserManager:
+    """Manage authorized users and admins"""
+    
+    def __init__(self, auth_file: str):
+        self.auth_file = auth_file
+        self.authorized_users: Dict[str, Dict] = {}
+        self.load_users()
+    
+    def load_users(self):
+        """Load authorized users from file"""
+        if os.path.exists(self.auth_file):
             try:
-                await context.bot.send_message(
-                    chat_id=int(ch_id),
-                    text=post["text"],
-                    entities=entities,
-                    reply_markup=keyboard,
+                with open(self.auth_file, 'r') as f:
+                    self.authorized_users = json.load(f)
+            except:
+                self.authorized_users = {}
+        else:
+            # Add main admin if file doesn't exist
+            self.authorized_users = {
+                str(ADMIN_USER_ID): {
+                    "role": "super_admin",
+                    "name": "Main Admin",
+                    "added_by": "system",
+                    "added_date": datetime.now().isoformat(),
+                    "channels": []
+                }
+            }
+            self.save_users()
+    
+    def save_users(self):
+        """Save authorized users to file"""
+        with open(self.auth_file, 'w') as f:
+            json.dump(self.authorized_users, f, indent=2)
+    
+    def is_authorized(self, user_id: int) -> bool:
+        """Check if user is authorized"""
+        return str(user_id) in self.authorized_users
+    
+    def get_user_role(self, user_id: int) -> Optional[str]:
+        """Get user's role"""
+        user_data = self.authorized_users.get(str(user_id))
+        return user_data.get("role") if user_data else None
+    
+    def is_admin(self, user_id: int) -> bool:
+        """Check if user is admin or super admin"""
+        role = self.get_user_role(user_id)
+        return role in ["admin", "super_admin"]
+    
+    def is_super_admin(self, user_id: int) -> bool:
+        """Check if user is super admin"""
+        return self.get_user_role(user_id) == "super_admin"
+    
+    def add_user(self, user_id: int, name: str, added_by: int, role: str = "user") -> bool:
+        """Add a new authorized user"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            return False
+        
+        self.authorized_users[user_id_str] = {
+            "role": role,
+            "name": name,
+            "added_by": str(added_by),
+            "added_date": datetime.now().isoformat(),
+            "channels": []
+        }
+        self.save_users()
+        return True
+    
+    def remove_user(self, user_id: int) -> bool:
+        """Remove an authorized user"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            if self.authorized_users[user_id_str]["role"] == "super_admin":
+                return False
+            del self.authorized_users[user_id_str]
+            self.save_users()
+            return True
+        return False
+    
+    def list_users(self) -> List[tuple]:
+        """List all authorized users"""
+        users = []
+        for user_id, data in self.authorized_users.items():
+            users.append((int(user_id), data["name"], data["role"], data["added_date"]))
+        return users
+    
+    def update_role(self, user_id: int, new_role: str) -> bool:
+        """Update user's role"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            if self.authorized_users[user_id_str]["role"] == "super_admin":
+                return False
+            self.authorized_users[user_id_str]["role"] = new_role
+            self.save_users()
+            return True
+        return False
+    
+    def add_user_channel(self, user_id: int, channel_id: str, channel_info: dict) -> bool:
+        """Add a channel to user's connected channels"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            if "channels" not in self.authorized_users[user_id_str]:
+                self.authorized_users[user_id_str]["channels"] = []
+            
+            # Check if already connected
+            for ch in self.authorized_users[user_id_str]["channels"]:
+                if ch["channel_id"] == channel_id:
+                    return False
+            
+            self.authorized_users[user_id_str]["channels"].append(channel_info)
+            self.save_users()
+            return True
+        return False
+    
+    def get_user_channels(self, user_id: int) -> List[dict]:
+        """Get all channels connected by user"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            return self.authorized_users[user_id_str].get("channels", [])
+        return []
+    
+    def remove_user_channel(self, user_id: int, channel_id: str) -> bool:
+        """Remove a channel from user's list"""
+        user_id_str = str(user_id)
+        if user_id_str in self.authorized_users:
+            channels = self.authorized_users[user_id_str].get("channels", [])
+            self.authorized_users[user_id_str]["channels"] = [
+                ch for ch in channels if ch["channel_id"] != channel_id
+            ]
+            self.save_users()
+            return True
+        return False
+
+class ColorfulButtonBot:
+    """Main bot class with multi-channel support"""
+    
+    # Color schemes for buttons
+    BUTTON_STYLES = {
+        "primary": {"bg_color": "#0088cc", "text_color": "#ffffff"},
+        "success": {"bg_color": "#00cc66", "text_color": "#ffffff"},
+        "danger": {"bg_color": "#ff4444", "text_color": "#ffffff"},
+        "warning": {"bg_color": "#ffaa00", "text_color": "#000000"},
+        "info": {"bg_color": "#33b5e5", "text_color": "#ffffff"},
+        "purple": {"bg_color": "#aa66cc", "text_color": "#ffffff"},
+        "dark": {"bg_color": "#222222", "text_color": "#ffffff"},
+        "light": {"bg_color": "#f0f0f0", "text_color": "#000000"},
+    }
+    
+    def __init__(self, token: str):
+        self.application = Application.builder().token(token).build()
+        self.user_manager = UserManager(AUTH_FILE)
+        self.user_sessions = {}  # Store user session data
+        self.channel_pending_connection = {}  # Store users waiting to connect channel
+        self.setup_handlers()
+    
+    def setup_handlers(self):
+        """Setup all command and callback handlers"""
+        # Public command (only start and auth)
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("auth", self.auth_command))
+        
+        # Protected commands (require authorization)
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("newpost", self.new_post_command))
+        self.application.add_handler(CommandHandler("postnow", self.post_now_command))
+        self.application.add_handler(CommandHandler("templates", self.templates_command))
+        self.application.add_handler(CommandHandler("channels", self.list_channels_command))
+        self.application.add_handler(CommandHandler("connect", self.connect_channel_command))
+        self.application.add_handler(CommandHandler("disconnect", self.disconnect_channel_command))
+        self.application.add_handler(CommandHandler("setdefault", self.set_default_channel_command))
+        
+        # Admin commands
+        self.application.add_handler(CommandHandler("users", self.list_users_command))
+        self.application.add_handler(CommandHandler("adduser", self.add_user_command))
+        self.application.add_handler(CommandHandler("removeuser", self.remove_user_command))
+        self.application.add_handler(CommandHandler("setadmin", self.set_admin_command))
+        
+        # Inline mode handler
+        self.application.add_handler(InlineQueryHandler(self.inline_query))
+        
+        # Callback query handler
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        
+        # Message handler for forwarded messages (channel connection)
+        self.application.add_handler(MessageHandler(
+            filters.FORWARDED, self.handle_forwarded_message
+        ))
+        
+        # Message handler for post creation
+        self.application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, self.handle_post_content
+        ))
+    
+    def check_auth(self, user_id: int) -> bool:
+        """Check if user is authorized"""
+        return self.user_manager.is_authorized(user_id)
+    
+    def require_auth(func):
+        """Decorator to require authorization"""
+        async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+            user_id = update.effective_user.id
+            if not self.check_auth(user_id):
+                await update.message.reply_text(
+                    "⛔ **Access Denied**\n\n"
+                    "You are not authorized to use this bot.\n\n"
+                    "Please contact the bot administrator to request access.\n\n"
+                    "If you have an authorization code, use:\n"
+                    "`/auth YOUR_CODE`",
+                    parse_mode=ParseMode.MARKDOWN
                 )
-                results.append(f"✅ {title}")
-            except Exception as e:
-                results.append(f"❌ {title}: {e}")
+                return
+            return await func(self, update, context)
+        return wrapper
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command - Public access"""
+        user = update.effective_user
+        user_id = user.id
+        
+        if self.check_auth(user_id):
+            # Authorized user
+            role = self.user_manager.get_user_role(user_id)
+            channels = self.user_manager.get_user_channels(user_id)
+            
+            welcome_text = f"""
+🎨 **Welcome back, {user.first_name}!** 🎨
+**Role:** {role.upper()}
+**Connected Channels:** {len(channels)}
 
-        await query.edit_message_text(
-            "<b>Publish results:</b>\n\n" + "\n".join(results),
-            parse_mode=ParseMode.HTML,
-            reply_markup=build_main_menu(),
+I can help you create amazing posts with:
+• ✨ Colorful inline buttons (8 different colors!)
+• 📝 Rich formatting (Markdown & HTML)
+• 🖼️ Media support
+• 🔄 Inline mode
+• 📢 Multi-channel posting
+
+**Commands:**
+/newpost - Start creating a new post
+/templates - View post templates
+/channels - Manage your channels
+/postnow - Post to channel
+/help - Detailed help
+
+**Channel Management:**
+/connect - Connect a channel (forward a message)
+/disconnect - Remove a channel
+/setdefault - Set default channel
+
+**Admin Commands** (Admins only):
+/users - List authorized users
+/adduser - Add new user
+/removeuser - Remove user
+/setadmin - Make user admin
+            """
+            await update.message.reply_text(
+                welcome_text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.get_main_keyboard()
+            )
+        else:
+            # Unauthorized user
+            await update.message.reply_text(
+                f"🔐 **Welcome {user.first_name}** 🔐\n\n"
+                "This bot is restricted to authorized users only.\n\n"
+                "**How to get access:**\n"
+                "1. Contact the bot administrator\n"
+                "2. If you have an authorization code, use:\n"
+                "   `/auth YOUR_CODE`\n\n"
+                "**Administrator Contact:**\n"
+                f"Main Admin ID: `{ADMIN_USER_ID}`\n\n"
+                "*Note: Only the bot owner can grant access.*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
+    async def auth_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle authorization - Public access"""
+        user = update.effective_user
+        user_id = user.id
+        
+        if self.check_auth(user_id):
+            await update.message.reply_text(
+                "✅ You are already authorized!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "❌ Please provide an authorization code.\n"
+                "Usage: `/auth YOUR_CODE`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        auth_code = args[0]
+        
+        # Example authorization code (you can make this dynamic per user)
+        VALID_CODE = "COOLPOST2024"
+        
+        if auth_code == VALID_CODE:
+            success = self.user_manager.add_user(
+                user_id, 
+                user.full_name, 
+                ADMIN_USER_ID, 
+                "user"
+            )
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **Authorization Successful!**\n\n"
+                    f"Welcome {user.first_name}! You now have access to the bot.\n\n"
+                    "**Next Steps:**\n"
+                    "1. Add this bot as admin to your channel\n"
+                    "2. Use `/connect` and forward a message from your channel\n"
+                    "3. Start creating amazing posts!\n\n"
+                    "Use /help to get started.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Error adding user. Please contact administrator."
+                )
+        else:
+            await update.message.reply_text(
+                "❌ **Invalid Authorization Code**\n\n"
+                "Please check your code and try again.\n"
+                "Contact administrator if you need access.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
+    async def connect_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Connect a channel by forwarding a message"""
+        user_id = update.effective_user.id
+        
+        if not self.check_auth(user_id):
+            return
+        
+        await update.message.reply_text(
+            "🔗 **Connect a Channel** 🔗\n\n"
+            "To connect your channel to this bot:\n\n"
+            "1. **Add this bot as admin** to your channel\n"
+            "2. **Forward any message** from that channel to this chat\n"
+            "3. The bot will automatically detect and connect the channel\n\n"
+            "**Important:**\n"
+            "• Bot needs 'Post Messages' permission\n"
+            "• You can connect multiple channels\n"
+            "• Each user can manage their own channels\n\n"
+            "*Forward a message from your channel now...*",
+            parse_mode=ParseMode.MARKDOWN
         )
-        context.user_data.clear()
-        return MAIN_MENU
+        
+        self.channel_pending_connection[user_id] = True
+    
+    async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle forwarded messages for channel connection"""
+        user_id = update.effective_user.id
+        
+        if not self.check_auth(user_id):
+            await update.message.reply_text("⛔ You are not authorized!")
+            return
+        
+        # Check if user is trying to connect a channel
+        if user_id not in self.channel_pending_connection:
+            return
+        
+        forwarded_msg = update.message.forward_from_chat
+        
+        if not forwarded_msg:
+            await update.message.reply_text(
+                "❌ Please forward a message from the channel, not from a user!"
+            )
+            return
+        
+        channel_id = forwarded_msg.id
+        channel_title = forwarded_msg.title or f"Channel_{channel_id}"
+        channel_username = forwarded_msg.username
+        
+        # Try to get more channel info
+        try:
+            chat = await context.bot.get_chat(channel_id)
+            channel_title = chat.title
+            channel_username = chat.username
+        except:
+            pass
+        
+        # Check if bot is admin in the channel
+        try:
+            bot_member = await context.bot.get_chat_member(channel_id, context.bot.id)
+            if bot_member.status not in ['administrator', 'creator']:
+                await update.message.reply_text(
+                    "❌ **Bot is not an admin in this channel!**\n\n"
+                    "Please add this bot as an admin to your channel first.\n\n"
+                    "**Required permissions:**\n"
+                    "• Post Messages\n"
+                    "• Edit Messages (optional)\n"
+                    "• Delete Messages (optional)",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                del self.channel_pending_connection[user_id]
+                return
+        except BadRequest as e:
+            await update.message.reply_text(
+                f"❌ **Cannot verify bot permissions!**\n\n"
+                f"Error: {str(e)}\n\n"
+                f"Make sure:\n"
+                f"• Bot is added as admin to the channel\n"
+                f"• Channel is not private/super-private\n"
+                f"• You forwarded a message from the correct channel",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            del self.channel_pending_connection[user_id]
+            return
+        
+        # Save channel to user's connected channels
+        channel_info = {
+            "channel_id": str(channel_id),
+            "channel_title": channel_title,
+            "channel_username": channel_username,
+            "connected_date": datetime.now().isoformat(),
+            "is_default": len(self.user_manager.get_user_channels(user_id)) == 0  # First channel becomes default
+        }
+        
+        success = self.user_manager.add_user_channel(user_id, str(channel_id), channel_info)
+        
+        if success:
+            default_text = " (Set as Default)" if channel_info["is_default"] else ""
+            
+            await update.message.reply_text(
+                f"✅ **Channel Connected Successfully!**{default_text}\n\n"
+                f"**Channel:** {channel_title}\n"
+                f"**ID:** `{channel_id}`\n"
+                f"**Username:** @{channel_username if channel_username else 'N/A'}\n\n"
+                f"**What's Next?**\n"
+                f"• Use `/postnow` to post to this channel\n"
+                f"• Use `/channels` to manage all your channels\n"
+                f"• Use `/setdefault` to change default channel\n"
+                f"• Use `/disconnect` to remove this channel\n\n"
+                f"*You can connect multiple channels to the bot!*",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ **Channel already connected!**\n\n"
+                "Use `/channels` to see your connected channels.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        
+        # Clear pending connection
+        del self.channel_pending_connection[user_id]
+    
+    async def list_channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all connected channels for the user"""
+        user_id = update.effective_user.id
+        
+        if not self.check_auth(user_id):
+            return
+        
+        channels = self.user_manager.get_user_channels(user_id)
+        
+        if not channels:
+            await update.message.reply_text(
+                "📢 **No Channels Connected** 📢\n\n"
+                "You haven't connected any channels yet.\n\n"
+                "**To connect a channel:**\n"
+                "1. Add this bot as admin to your channel\n"
+                "2. Use `/connect` command\n"
+                "3. Forward a message from your channel\n\n"
+                "The bot will automatically detect and connect it!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        channel_list = "📢 **Your Connected Channels** 📢\n\n"
+        
+        for i, channel in enumerate(channels, 1):
+            default_mark = " ⭐ (Default)" if channel.get("is_default", False) else ""
+            channel_list += f"{i}. **{channel['channel_title']}**{default_mark}\n"
+            channel_list += f"   ID: `{channel['channel_id']}`\n"
+            if channel.get('channel_username'):
+                channel_list += f"   Username: @{channel['channel_username']}\n"
+            channel_list += f"   Connected: {channel['connected_date'][:10]}\n\n"
+        
+        keyboard = []
+        for channel in channels:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📤 Post to {channel['channel_title'][:20]}",
+                    callback_data=f"post_to_{channel['channel_id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Connect New Channel", callback_data="connect_channel")])
+        
+        await update.message.reply_text(
+            channel_list,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def disconnect_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Disconnect a channel"""
+        user_id = update.effective_user.id
+        
+        if not self.check_auth(user_id):
+            return
+        
+        channels = self.user_manager.get_user_channels(user_id)
+        
+        if not channels:
+            await update.message.reply_text("❌ You don't have any connected channels!")
+            return
+        
+        keyboard = []
+        for channel in channels:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"❌ {channel['channel_title'][:30]}",
+                    callback_data=f"disconnect_{channel['channel_id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_disconnect")])
+        
+        await update.message.reply_text(
+            "🗑️ **Select channel to disconnect:**\n\n"
+            "This will remove the channel from your bot access.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def set_default_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set default channel for posting"""
+        user_id = update.effective_user.id
+        
+        if not self.check_auth(user_id):
+            return
+        
+        channels = self.user_manager.get_user_channels(user_id)
+        
+        if not channels:
+            await update.message.reply_text("❌ You don't have any connected channels!")
+            return
+        
+        keyboard = []
+        for channel in channels:
+            default_mark = " ⭐" if channel.get("is_default", False) else ""
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📢 {channel['channel_title'][:30]}{default_mark}",
+                    callback_data=f"setdefault_{channel['channel_id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel_default")])
+        
+        await update.message.reply_text(
+            "⭐ **Set Default Channel** ⭐\n\n"
+            "Select which channel should be your default for posting.\n"
+            "The default channel will be used when you don't specify one.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    @require_auth
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /help command"""
+        user_id = update.effective_user.id
+        is_admin = self.user_manager.is_admin(user_id)
+        
+        help_text = """
+📚 **Detailed Help Guide**
 
-    return SELECT_CHANNELS
+**Channel Management:**
+/connect - Connect a new channel (forward a message)
+/channels - List your connected channels
+/disconnect - Remove a connected channel
+/setdefault - Set default channel for posting
 
+**Creating Posts:**
+1. Use `/newpost` and follow the wizard
+2. Choose post type (text, media, or mixed)
+3. Add your content with formatting
+4. Add colorful buttons using HTML tags
+5. Post to channel or copy the message
 
-# ─── Preview helper ───────────────────────────────────────────────────────────
-async def send_preview(query, context: ContextTypes.DEFAULT_TYPE):
-    post = context.user_data["post"]
-    keyboard = build_post_keyboard(post["buttons"])
-    entities = [MessageEntity.de_json(e, context.bot) for e in post["entities"]]
+**Colorful Buttons - Use HTML tags:**
+- `<button primary>Click Me</button>` - Blue button
+- `<button success>Success</button>` - Green button  
+- `<button danger>Delete</button>` - Red button
+- `<button warning>Warning</button>` - Yellow button
+- `<button info>Info</button>` - Light blue
+- `<button purple>Special</button>` - Purple button
+- `<button dark>Dark Mode</button>` - Dark button
+- `<button light>Light Mode</button>` - White button
 
-    await query.message.reply_text("👁 <b>Post preview:</b>", parse_mode=ParseMode.HTML)
-    await query.message.reply_text(
-        text=post["text"],
-        entities=entities,
-        reply_markup=keyboard,
-    )
-    await query.message.reply_text(
-        "Preview sent above. Continue editing or click ✅ Done.",
-        reply_markup=button_editor_keyboard(post["buttons"]),
-    )
+**URL Buttons:**
+`<url primary>https://example.com|Visit Site</url>`
 
+**Post Templates:**
+• Announcement template
+• Poll with voting buttons
+• Product showcase
+• Countdown timer
 
-# ─── Cancel ───────────────────────────────────────────────────────────────────
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
-    await update.message.reply_text("Cancelled.", reply_markup=build_main_menu())
-    return MAIN_MENU
-
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            MAIN_MENU: [
-                CallbackQueryHandler(main_menu_callback),
-            ],
-            ADD_CHANNEL: [
-                MessageHandler(filters.ALL & ~filters.COMMAND, receive_channel),
-                CallbackQueryHandler(main_menu_callback, pattern="^back_main$"),
-            ],
-            COMPOSE_TEXT: [
-                MessageHandler(filters.ALL & ~filters.COMMAND, receive_post_text),
-            ],
-            COMPOSE_BUTTONS: [
-                CallbackQueryHandler(button_editor_callback),
-            ],
-            ADDING_BUTTON_TEXT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_button_text),
-            ],
-            ADDING_BUTTON_URL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_button_url),
-            ],
-            ADDING_BUTTON_ROW: [
-                CallbackQueryHandler(receive_button_row, pattern="^btn_(same|new)_row$"),
-            ],
-            SELECT_CHANNELS: [
-                CallbackQueryHandler(channel_select_callback),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,
-    )
-
-    app.add_handler(conv)
-
-    print("Bot is running...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
+**Examples:**
